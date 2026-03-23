@@ -1,391 +1,275 @@
 """
-Calculadora de Ampacidad de Líneas de Transmisión
-Basado en el estándar IEEE 738 para cálculo de ampacidad
+Punto de entrada principal para la aplicación de calculadora de ampacidad
 """
 
-import streamlit as st
-import numpy as np
-import pandas as pd
-import plotly.graph_objects as go
-import plotly.express as px
-from dataclasses import dataclass
-from typing import Dict, List, Tuple
-import math
+import sys
+import os
+import argparse
+from ampacity_calculator import AmpacityCalculator, ConductorDatabase
+from validator import safe_calculate_ampacity, AmpacityValidator
+from settings_manager import SettingsManager, ProfileManager
+from report_generator import ReportGenerator
+import json
 
-@dataclass
-class LineParameters:
-    """Parámetros de la línea de transmisión"""
-    conductor_diameter: float  # mm
-    conductor_resistance: float  # Ω/km a 20°C
-    conductor_material: str  # 'ACSR', 'AAC', 'AAAC', 'CU'
-    ambient_temperature: float  # °C
-    wind_speed: float  # m/s
-    solar_radiation: float  # W/m²
-    emissivity: float  # adimensional
-    absorption_coefficient: float  # adimensional
-    max_conductor_temp: float  # °C
-    
-@dataclass
-class EnvironmentalConditions:
-    """Condiciones ambientales"""
-    ambient_temp: float  # °C
-    wind_speed: float  # m/s
-    wind_angle: float  # grados
-    solar_radiation: float  # W/m²
-    altitude: float  # m
-    atmospheric_pressure: float  # kPa
 
-class AmpacityCalculator:
-    """Calculador de ampacidad basado en IEEE 738"""
+def main():
+    """Función principal para ejecución desde línea de comandos"""
     
-    def __init__(self):
-        self.stefan_boltzmann = 5.67e-8  # W/(m²·K⁴)
-        
-    def calculate_air_density(self, altitude: float, temp_celsius: float) -> float:
-        """Calcular densidad del aire basada en altitud y temperatura"""
-        # Simplificación: densidad del aire a nivel del mar a 20°C = 1.204 kg/m³
-        # Factor de corrección por altitud
-        sea_level_density = 1.204  # kg/m³
-        altitude_factor = math.exp(-altitude / 8000)  # Aproximación exponencial
-        temp_factor = 293.15 / (temp_celsius + 273.15)  # Corrección por temperatura
-        
-        return sea_level_density * altitude_factor * temp_factor
+    parser = argparse.ArgumentParser(description='Calculadora de Ampacidad de Líneas de Transmisión')
+    parser.add_argument('--mode', choices=['web', 'cli', 'batch'], default='web',
+                       help='Modo de ejecución: web (interfaz gráfica), cli (línea de comandos), batch (procesamiento por lotes)')
+    parser.add_argument('--conductor', type=str, help='ID del conductor a usar')
+    parser.add_argument('--config', type=str, help='Archivo de configuración JSON')
+    parser.add_argument('--output', type=str, help='Archivo de salida para resultados')
+    parser.add_argument('--profile', type=str, help='Perfil de configuración predefinido')
+    parser.add_argument('--report', action='store_true', help='Generar reporte HTML')
     
-    def calculate_heat_convection(self, temp_diff: float, wind_speed: float, 
-                                 conductor_diameter: float, air_density: float) -> float:
-        """Calcular pérdida de calor por convección (W/m)"""
-        # Convección forzada y natural combinada
-        if wind_speed > 0.1:
-            # Convección forzada
-            Re = air_density * wind_speed * conductor_diameter / 1.8e-5  # Número de Reynolds
-            Nu = 0.65 + 0.35 * Re**0.52  # Número de Nusselt
-        else:
-            # Convección natural
-            Gr = 9.81 * temp_diff * (conductor_diameter/1000)**3 / ((temp_diff + 273.15) * (1.8e-5/air_density)**2)
-            Nu = 0.48 * Gr**0.25
-        
-        k_air = 0.024  # Conductividad térmica del aire W/(m·K)
-        h_conv = Nu * k_air / (conductor_diameter / 1000)  # Coeficiente de convección
-        
-        return h_conv * math.pi * (conductor_diameter / 1000) * temp_diff
+    args = parser.parse_args()
     
-    def calculate_heat_radiation(self, conductor_temp: float, ambient_temp: float, 
-                               emissivity: float, conductor_diameter: float) -> float:
-        """Calcular pérdida de calor por radiación (W/m)"""
-        T_conductor = conductor_temp + 273.15
-        T_ambient = ambient_temp + 273.15
-        
-        q_rad = self.stefan_boltzmann * emissivity * math.pi * (conductor_diameter / 1000) * \
-                (T_conductor**4 - T_ambient**4)
-        
-        return q_rad
+    if args.mode == 'web':
+        # Ejecutar aplicación web Streamlit
+        import subprocess
+        subprocess.run([sys.executable, '-m', 'streamlit', 'run', 'app.py'])
     
-    def calculate_solar_heat_gain(self, solar_radiation: float, absorption_coefficient, 
-                                conductor_diameter: float) -> float:
-        """Calcular ganancia de calor solar (W/m)"""
-        return solar_radiation * absorption_coefficient * conductor_diameter / 1000
+    elif args.mode == 'cli':
+        # Modo línea de comandos
+        run_cli_mode(args)
     
-    def calculate_resistance_at_temperature(self, resistance_20c: float, temp: float, 
-                                          material: str) -> float:
-        """Calcular resistencia a temperatura dada"""
-        # Coeficientes de temperatura de resistencia (1/°C)
-        temp_coefficients = {
-            'ACSR': 0.00393,  # Aluminio
-            'AAC': 0.00393,
-            'AAAC': 0.00393,
-            'CU': 0.00393     # Cobre (similar para simplificación)
-        }
-        
-        alpha = temp_coefficients.get(material, 0.00393)
-        return resistance_20c * (1 + alpha * (temp - 20))
-    
-    def calculate_ampacity(self, line_params: LineParameters, 
-                          env_conditions: EnvironmentalConditions) -> float:
-        """Calcular ampacidad máxima del conductor"""
-        # Temperatura del conductor permitida
-        max_temp = line_params.max_conductor_temp
-        ambient_temp = env_conditions.ambient_temp
-        
-        # Calcular pérdidas de calor
-        temp_diff = max_temp - ambient_temp
-        air_density = self.calculate_air_density(env_conditions.altitude, ambient_temp)
-        
-        q_conv = self.calculate_heat_convection(
-            temp_diff, env_conditions.wind_speed, 
-            line_params.conductor_diameter, air_density
-        )
-        
-        q_rad = self.calculate_heat_radiation(
-            max_temp, ambient_temp, line_params.emissivity, 
-            line_params.conductor_diameter
-        )
-        
-        # Calcular ganancia de calor solar
-        q_solar = self.calculate_solar_heat_gain(
-            env_conditions.solar_radiation, line_params.absorption_coefficient,
-            line_params.conductor_diameter
-        )
-        
-        # Calcular resistencia a temperatura máxima
-        resistance = self.calculate_resistance_at_temperature(
-            line_params.conductor_resistance, max_temp, line_params.conductor_material
-        )
-        
-        # Balance de calor: I²R = q_conv + q_rad - q_solar
-        heat_loss = q_conv + q_rad - q_solar
-        
-        if heat_loss <= 0:
-            return 0  # No hay disipación de calor posible
-        
-        # Calcular corriente máxima (Ampacidad)
-        ampacity = math.sqrt(heat_loss / resistance)
-        
-        return ampacity
+    elif args.mode == 'batch':
+        # Modo procesamiento por lotes
+        run_batch_mode(args)
 
-def create_streamlit_app():
-    """Crear interfaz de usuario con Streamlit"""
+
+def run_cli_mode(args):
+    """Ejecutar en modo línea de comandos"""
     
-    st.set_page_config(
-        page_title="Calculadora de Ampacidad",
-        page_icon="⚡",
-        layout="wide"
-    )
+    # Inicializar componentes
+    calculator = AmpacityCalculator()
+    db = ConductorDatabase()
+    settings = SettingsManager()
+    profiles = ProfileManager()
     
-    st.title("⚡ Calculadora de Ampacidad de Líneas de Transmisión")
-    st.markdown("Basado en el estándar IEEE 738 para cálculo de ampacidad")
+    # Cargar configuración
+    if args.config:
+        with open(args.config, 'r') as f:
+            config = json.load(f)
+        environmental_params = config.get('environmental', {})
+    elif args.profile:
+        profiles.apply_profile(args.profile, settings)
+        environmental_params = settings.get_all_settings()
+    else:
+        environmental_params = settings.get_all_settings()
     
-    # Sidebar para parámetros de entrada
-    st.sidebar.header("Parámetros del Conductor")
-    
-    # Material del conductor
-    conductor_material = st.sidebar.selectbox(
-        "Material del Conductor",
-        ["ACSR", "AAC", "AAAC", "CU"],
-        help="ACSR: Aluminum Conductor Steel Reinforced"
-    )
-    
-    # Diámetro del conductor
-    conductor_diameter = st.sidebar.number_input(
-        "Diámetro del Conductor (mm)",
-        min_value=10.0,
-        max_value=50.0,
-        value=28.6,
-        step=0.1
-    )
-    
-    # Resistencia del conductor
-    conductor_resistance = st.sidebar.number_input(
-        "Resistencia (Ω/km a 20°C)",
-        min_value=0.01,
-        max_value=1.0,
-        value=0.09,
-        step=0.01
-    )
-    
-    # Temperatura máxima del conductor
-    max_conductor_temp = st.sidebar.number_input(
-        "Temperatura Máxima del Conductor (°C)",
-        min_value=50.0,
-        max_value=100.0,
-        value=75.0,
-        step=1.0
-    )
-    
-    # Propiedades térmicas
-    emissivity = st.sidebar.slider(
-        "Emisividad",
-        min_value=0.2,
-        max_value=1.0,
-        value=0.5,
-        step=0.05
-    )
-    
-    absorption_coefficient = st.sidebar.slider(
-        "Coeficiente de Absorción Solar",
-        min_value=0.2,
-        max_value=1.0,
-        value=0.5,
-        step=0.05
-    )
-    
-    st.sidebar.header("Condiciones Ambientales")
-    
-    ambient_temp = st.sidebar.number_input(
-        "Temperatura Ambiente (°C)",
-        min_value=-20.0,
-        max_value=50.0,
-        value=25.0,
-        step=1.0
-    )
-    
-    wind_speed = st.sidebar.number_input(
-        "Velocidad del Viento (m/s)",
-        min_value=0.0,
-        max_value=20.0,
-        value=1.0,
-        step=0.1
-    )
-    
-    solar_radiation = st.sidebar.number_input(
-        "Radiación Solar (W/m²)",
-        min_value=0.0,
-        max_value=1000.0,
-        value=900.0,
-        step=10.0
-    )
-    
-    altitude = st.sidebar.number_input(
-        "Altitud (m)",
-        min_value=0,
-        max_value=3000,
-        value=0,
-        step=100
-    )
-    
-    # Botón de cálculo
-    if st.sidebar.button("Calcular Ampacidad", type="primary"):
+    # Seleccionar conductor
+    if args.conductor:
+        conductor_params = db.get_conductor(args.conductor)
+        if not conductor_params:
+            print(f"Error: Conductor '{args.conductor}' no encontrado")
+            print("Conductores disponibles:")
+            for cond_id, cond in db.get_all_conductors().items():
+                print(f"  {cond_id}: {cond['name']}")
+            return
+    else:
+        # Mostrar lista de conductores disponibles
+        print("Conductores disponibles:")
+        conductors = db.get_all_conductors()
+        for i, (cond_id, cond) in enumerate(conductors.items(), 1):
+            print(f"{i}. {cond_id}: {cond['name']} ({cond['type']})")
         
-        # Crear objetos de parámetros
-        line_params = LineParameters(
-            conductor_diameter=conductor_diameter,
-            conductor_resistance=conductor_resistance,
-            conductor_material=conductor_material,
-            ambient_temperature=ambient_temp,
-            wind_speed=wind_speed,
-            solar_radiation=solar_radiation,
-            emissivity=emissivity,
-            absorption_coefficient=absorption_coefficient,
-            max_conductor_temp=max_conductor_temp
-        )
-        
-        env_conditions = EnvironmentalConditions(
-            ambient_temp=ambient_temp,
-            wind_speed=wind_speed,
-            wind_angle=90,  # Perpendicular al conductor
-            solar_radiation=solar_radiation,
-            altitude=altitude,
-            atmospheric_pressure=101.3  # kPa
-        )
-        
-        # Calcular ampacidad
-        calculator = AmpacityCalculator()
-        ampacity = calculator.calculate_ampacity(line_params, env_conditions)
+        try:
+            choice = int(input("Seleccione el número del conductor: ")) - 1
+            conductor_id = list(conductors.keys())[choice]
+            conductor_params = conductors[conductor_id]
+        except (ValueError, IndexError):
+            print("Selección inválida")
+            return
+    
+    # Realizar cálculo
+    try:
+        results = safe_calculate_ampacity(calculator, conductor_params, environmental_params)
         
         # Mostrar resultados
-        st.header("📊 Resultados")
+        print(f"\n📊 Resultados para {conductor_params['name']}")
+        print("=" * 50)
+        print(f"Ampacidad: {results['ampacity']:.2f} A")
+        print(f"Temperatura del conductor: {results['conductor_temperature']:.1f} °C")
+        print(f"Resistencia a temperatura: {results['resistance_at_temp']:.4f} Ω/km")
+        print(f"Pérdida total de calor: {results['total_heat_loss']:.2f} W/m")
         
-        col1, col2, col3 = st.columns(3)
+        print(f"\n🔥 Balance de Calor:")
+        print(f"  Convección: {results['heat_convection']:.2f} W/m")
+        print(f"  Radiación: {results['heat_radiation']:.2f} W/m")
+        print(f"  Solar: {results['solar_heat_gain']:.2f} W/m")
         
-        with col1:
-            st.metric(
-                "Ampacidad Máxima",
-                f"{ampacity:.1f} A",
-                delta=None
+        # Guardar resultados
+        if args.output:
+            output_data = {
+                'conductor': conductor_params,
+                'environmental': environmental_params,
+                'results': results
+            }
+            with open(args.output, 'w') as f:
+                json.dump(output_data, f, indent=2, default=str)
+            print(f"\n💾 Resultados guardados en: {args.output}")
+        
+        # Generar reporte
+        if args.report:
+            generator = ReportGenerator()
+            report_file = generator.generate_basic_report(
+                results, conductor_params, environmental_params
             )
+            print(f"📄 Reporte generado: {report_file}")
+    
+    except Exception as e:
+        print(f"Error en el cálculo: {e}")
+
+
+def run_batch_mode(args):
+    """Ejecutar en modo procesamiento por lotes"""
+    
+    if not args.config:
+        print("Error: Modo batch requiere archivo de configuración (--config)")
+        return
+    
+    # Cargar configuración batch
+    with open(args.config, 'r') as f:
+        batch_config = json.load(f)
+    
+    calculator = AmpacityCalculator()
+    db = ConductorDatabase()
+    generator = ReportGenerator()
+    
+    results_list = []
+    
+    # Procesar cada caso
+    for i, case in enumerate(batch_config.get('cases', [])):
+        conductor_id = case.get('conductor')
+        env_params = case.get('environmental', {})
         
-        with col2:
-            # Calcular potencia para voltaje típico de transmisión
-            voltage = 230  # kV (típico)
-            power = ampacity * voltage * math.sqrt(3) / 1000  # MW
-            st.metric(
-                "Potencia Máxima",
-                f"{power:.1f} MW",
-                delta=None
-            )
+        conductor_params = db.get_conductor(conductor_id)
+        if not conductor_params:
+            print(f"Advertencia: Conductor '{conductor_id}' no encontrado, omitiendo caso {i+1}")
+            continue
         
-        with col3:
-            # Margen de seguridad (asumiendo carga actual del 70%)
-            current_load = ampacity * 0.7
-            margin = (ampacity - current_load) / ampacity * 100
-            st.metric(
-                "Margen de Seguridad",
-                f"{margin:.1f}%",
-                delta=None
-            )
+        try:
+            results = safe_calculate_ampacity(calculator, conductor_params, env_params)
+            
+            # Agregar información del caso
+            case_results = {
+                'case_id': case.get('id', f'case_{i+1}'),
+                'conductor': conductor_params,
+                'environmental': env_params,
+                'results': results
+            }
+            results_list.append(case_results)
+            
+            print(f"✅ Caso {i+1}: {conductor_params['name']} - Ampacidad: {results['ampacity']:.2f} A")
         
-        # Análisis detallado
-        st.header("🔍 Análisis Detallado")
+        except Exception as e:
+            print(f"❌ Error en caso {i+1}: {e}")
+    
+    # Generar reporte comparativo
+    if results_list:
+        comparison_data = []
+        for case_result in results_list:
+            comparison_data.append({
+                'name': case_result['conductor']['name'],
+                'type': case_result['conductor']['type'],
+                'diameter': case_result['conductor']['diameter'],
+                'area': case_result['conductor']['area'],
+                'ampacity': case_result['results']['ampacity'],
+                'resistance_at_temp': case_result['results']['resistance_at_temp'],
+                'total_heat_loss': case_result['results']['total_heat_loss']
+            })
         
-        # Calcular componentes del balance térmico
-        temp_diff = max_conductor_temp - ambient_temp
-        air_density = calculator.calculate_air_density(altitude, ambient_temp)
+        report_file = generator.generate_comparison_report(comparison_data)
+        print(f"\n📊 Reporte comparativo generado: {report_file}")
         
-        q_conv = calculator.calculate_heat_convection(
-            temp_diff, wind_speed, conductor_diameter, air_density
-        )
-        
-        q_rad = calculator.calculate_heat_radiation(
-            max_conductor_temp, ambient_temp, emissivity, conductor_diameter
-        )
-        
-        q_solar = calculator.calculate_solar_heat_gain(
-            solar_radiation, absorption_coefficient, conductor_diameter
-        )
-        
-        resistance = calculator.calculate_resistance_at_temperature(
-            conductor_resistance, max_conductor_temp, conductor_material
-        )
-        
-        heat_loss = q_conv + q_rad - q_solar
-        
-        # Tabla de balance térmico
-        balance_data = {
-            "Componente": ["Pérdida por Convección", "Pérdida por Radiación", 
-                          "Ganancia Solar", "Pérdida Total Neta"],
-            "Valor (W/m)": [f"{q_conv:.2f}", f"{q_rad:.2f}", f"{q_solar:.2f}", f"{heat_loss:.2f}"]
-        }
-        
-        balance_df = pd.DataFrame(balance_data)
-        st.table(balance_df)
-        
-        # Gráfico de sensibilidad
-        st.header("📈 Análisis de Sensibilidad")
-        
-        # Sensibilidad a temperatura ambiente
-        temp_range = np.linspace(10, 40, 10)
-        ampacity_vs_temp = []
-        
-        for temp in temp_range:
-            env_temp = EnvironmentalConditions(
-                ambient_temp=temp,
-                wind_speed=wind_speed,
-                wind_angle=90,
-                solar_radiation=solar_radiation,
-                altitude=altitude,
-                atmospheric_pressure=101.3
-            )
-            amp = calculator.calculate_ampacity(line_params, env_temp)
-            ampacity_vs_temp.append(amp)
-        
-        fig_temp = px.line(
-            x=temp_range, y=ampacity_vs_temp,
-            title="Ampacidad vs Temperatura Ambiente",
-            labels={"x": "Temperatura Ambiente (°C)", "y": "Ampacidad (A)"}
-        )
-        st.plotly_chart(fig_temp, use_container_width=True)
-        
-        # Sensibilidad a velocidad del viento
-        wind_range = np.linspace(0, 10, 11)
-        ampacity_vs_wind = []
-        
-        for wind in wind_range:
-            env_wind = EnvironmentalConditions(
-                ambient_temp=ambient_temp,
-                wind_speed=wind,
-                wind_angle=90,
-                solar_radiation=solar_radiation,
-                altitude=altitude,
-                atmospheric_pressure=101.3
-            )
-            amp = calculator.calculate_ampacity(line_params, env_wind)
-            ampacity_vs_wind.append(amp)
-        
-        fig_wind = px.line(
-            x=wind_range, y=ampacity_vs_wind,
-            title="Ampacidad vs Velocidad del Viento",
-            labels={"x": "Velocidad del Viento (m/s)", "y": "Ampacidad (A)"}
-        )
-        st.plotly_chart(fig_wind, use_container_width=True)
+        # Guardar resultados completos
+        if args.output:
+            with open(args.output, 'w') as f:
+                json.dump(results_list, f, indent=2, default=str)
+            print(f"💾 Resultados completos guardados en: {args.output}")
+
+
+def show_help():
+    """Mostrar ayuda y ejemplos de uso"""
+    help_text = """
+Calculadora de Ampacidad - Guía de Uso
+
+MODOS DE EJECUCIÓN:
+
+1. Modo Web (recomendado):
+   python main.py --mode web
+   o simplemente: streamlit run app.py
+
+2. Modo Línea de Comandos:
+   python main.py --mode cli --conductor ACSR_477_kcmil --report
+
+3. Modo Batch:
+   python main.py --mode batch --config batch_config.json --output results.json
+
+EJEMPLOS:
+
+# Cálculo simple con conductor específico
+python main.py --mode cli --conductor ACSR_477_kcmil
+
+# Usando perfil predefinido
+python main.py --mode cli --conductor ACSR_477_kcmil --profile tropical
+
+# Con archivo de configuración personalizado
+python main.py --mode cli --config my_config.json --output results.json --report
+
+# Procesamiento por lotes
+python main.py --mode batch --config batch_cases.json --report
+
+PERFILES DISPONIBLES:
+- tropical: Condiciones tropicales (alta temperatura y humedad)
+- desert: Condiciones de desierto (muy alta temperatura)
+- mountain: Condiciones de montaña (alta altitud)
+- winter: Condiciones invernales (baja temperatura)
+- coastal: Condiciones costeras (alta humedad)
+
+FORMATO ARCHIVO CONFIGURACIÓN:
+{
+  "environmental": {
+    "ambient_temperature": 40.0,
+    "conductor_temperature_limit": 75.0,
+    "altitude": 100.0,
+    "wind_speed": 1.0,
+    "solar_radiation": 1000.0,
+    "emissivity": 0.8,
+    "absorptivity": 0.8
+  }
+}
+
+FORMATO ARCHIVO BATCH:
+{
+  "cases": [
+    {
+      "id": "case_1",
+      "conductor": "ACSR_477_kcmil",
+      "environmental": {
+        "ambient_temperature": 40.0,
+        "wind_speed": 1.0
+      }
+    },
+    {
+      "id": "case_2", 
+      "conductor": "AAC_4/0_AW",
+      "environmental": {
+        "ambient_temperature": 30.0,
+        "wind_speed": 2.0
+      }
+    }
+  ]
+}
+"""
+    print(help_text)
+
 
 if __name__ == "__main__":
-    create_streamlit_app()
+    if len(sys.argv) == 1 or '--help' in sys.argv or '-h' in sys.argv:
+        show_help()
+    else:
+        main()

@@ -1,0 +1,190 @@
+{
+  "timestamp": "2026-03-22T21:19:20.743696",
+  "standard": "IEEE Std 738-2012",
+  "validation": {
+    "constants_physical": true,
+    "conductors": {
+      "valid": 8,
+      "total": 9,
+      "percentage": 88.88888888888889
+    },
+    "calculations": {
+      "valid": 3,
+      "total": 3,
+      "percentage": 100.0
+    },
+    "sensitivity": false,
+    "overall": false
+  },
+  "details": {
+    "constants": {
+      "Stefan-Boltzmann": {
+        "valor": 5.67e-08,
+        "te\u00f3rico": 5.67e-08,
+        "unidades": "W/(m\u00b2\u00b7K\u2074)",
+        "cumple": true
+      },
+      "Gravedad": {
+        "valor": 9.81,
+        "te\u00f3rico": 9.81,
+        "unidades": "m/s\u00b2",
+        "cumple": true
+      },
+      "Viscosidad aire": {
+        "valor": 1.8e-05,
+        "te\u00f3rico": 1.8e-05,
+        "unidades": "Pa\u00b7s",
+        "cumple": true
+      },
+      "Conductividad t\u00e9rmica": {
+        "valor": 0.024,
+        "te\u00f3rico": 0.024,
+        "unidades": "W/(m\u00b7K)",
+        "cumple": true
+      },
+      "Densidad nivel mar": {
+        "valor": 1.204,
+        "te\u00f3rico": 1.204,
+        "unidades": "kg/m\u00b3",
+        "cumple": true
+      }
+    },
+    "conductors": [
+      {
+        "id": "ACSR_1/0_AW",
+        "name": "ACSR 1/0 AW",
+        "type": "ACSR",
+        "alpha_valid": true,
+        "beta_valid": true,
+        "area_consistent": false,
+        "resistance_realistic": true,
+        "overall_valid": false
+      },
+      {
+        "id": "ACSR_4/0_AW",
+        "name": "ACSR 4/0 AW",
+        "type": "ACSR",
+        "alpha_valid": true,
+        "beta_valid": true,
+        "area_consistent": true,
+        "resistance_realistic": true,
+        "overall_valid": true
+      },
+      {
+        "id": "ACSR_336.4_kcmil",
+        "name": "ACSR 336.4 kcmil",
+        "type": "ACSR",
+        "alpha_valid": true,
+        "beta_valid": true,
+        "area_consistent": true,
+        "resistance_realistic": true,
+        "overall_valid": true
+      },
+      {
+        "id": "ACSR_477_kcmil",
+        "name": "ACSR 477 kcmil",
+        "type": "ACSR",
+        "alpha_valid": true,
+        "beta_valid": true,
+        "area_consistent": true,
+        "resistance_realistic": true,
+        "overall_valid": true
+      },
+      {
+        "id": "ACSR_795_kcmil",
+        "name": "ACSR 795 kcmil",
+        "type": "ACSR",
+        "alpha_valid": true,
+        "beta_valid": true,
+        "area_consistent": true,
+        "resistance_realistic": true,
+        "overall_valid": true
+      },
+      {
+        "id": "AAC_1/0_AW",
+        "name": "AAC 1/0 AW",
+        "type": "AAC",
+        "alpha_valid": true,
+        "beta_valid": true,
+        "area_consistent": true,
+        "resistance_realistic": true,
+        "overall_valid": true
+      },
+      {
+        "id": "AAC_4/0_AW",
+        "name": "AAC 4/0 AW",
+        "type": "AAC",
+        "alpha_valid": true,
+        "beta_valid": true,
+        "area_consistent": true,
+        "resistance_realistic": true,
+        "overall_valid": true
+      },
+      {
+        "id": "CU_1/0_AW",
+        "name": "Copper 1/0 AW",
+        "type": "CU",
+        "alpha_valid": true,
+        "beta_valid": true,
+        "area_consistent": true,
+        "resistance_realistic": true,
+        "overall_valid": true
+      },
+      {
+        "id": "CU_4/0_AW",
+        "name": "Copper 4/0 AW",
+        "type": "CU",
+        "alpha_valid": true,
+        "beta_valid": true,
+        "area_consistent": true,
+        "resistance_realistic": true,
+        "overall_valid": true
+      }
+    ],
+    "calculations": [
+      {
+        "test": "Caso est\u00e1ndar IEEE",
+        "ampacity": 608.6139156544975,
+        "ampacity_valid": true,
+        "balance_valid": true,
+        "temp_curve_valid": true,
+        "overall_valid": true
+      },
+      {
+        "test": "Baja temperatura",
+        "ampacity": 932.3084355670293,
+        "ampacity_valid": true,
+        "balance_valid": true,
+        "temp_curve_valid": true,
+        "overall_valid": true
+      },
+      {
+        "test": "Alta velocidad viento",
+        "ampacity": 995.3606447585863,
+        "ampacity_valid": true,
+        "balance_valid": true,
+        "temp_curve_valid": true,
+        "overall_valid": true
+      }
+    ],
+    "sensitivity": {
+      "wind_effects": [
+        526.9355928032852,
+        474.82661932433297,
+        608.6139156544975,
+        753.058443767949,
+        995.3606447585863,
+        1227.739540674922
+      ],
+      "wind_monotonic": false,
+      "temperature_effects": [
+        897.979076852894,
+        811.1687187604443,
+        716.1451518156744,
+        608.6139156544975,
+        479.7010696934631
+      ],
+      "temperature_monotonic": true
+    }
+  }
+}
