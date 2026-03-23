@@ -1,0 +1,26 @@
+{
+  "Personal": {
+    "name": "Prueba",
+    "type": "CUSTOM",
+    "diameter": 20.0,
+    "area": 250.0,
+    "rdc_20": 0.1,
+    "alpha": 0.00403,
+    "beta": 0.035,
+    "weight": 1.0,
+    "max_temp": 75.0,
+    "is_custom": true
+  },
+  "Prueba2": {
+    "name": "Prueba2",
+    "type": "AAAC",
+    "diameter": 15.0,
+    "area": 300.0,
+    "rdc_20": 0.1,
+    "alpha": 0.00403,
+    "beta": 0.035,
+    "weight": 2.0,
+    "max_temp": 100.0,
+    "is_custom": true
+  }
+}

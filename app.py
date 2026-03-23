@@ -7,8 +7,76 @@ import streamlit as st
 import pandas as pd
 import plotly.graph_objects as go
 import plotly.express as px
+import json
+from pathlib import Path
 from ampacity_calculator import AmpacityCalculator, ConductorDatabase
 from config import DEFAULT_PARAMETERS, CONDUCTOR_TYPES, UNITS
+
+# Archivo para guardar conductores personalizados
+CUSTOM_CONDUCTORS_FILE = Path("custom_conductors.json")
+
+
+def load_custom_conductors():
+    """Cargar conductores personalizados desde archivo JSON"""
+    if CUSTOM_CONDUCTORS_FILE.exists():
+        with open(CUSTOM_CONDUCTORS_FILE, 'r', encoding='utf-8') as f:
+            return json.load(f)
+    return {}
+
+
+def save_custom_conductors(custom_conductors):
+    """Guardar conductores personalizados en archivo JSON"""
+    with open(CUSTOM_CONDUCTORS_FILE, 'w', encoding='utf-8') as f:
+        json.dump(custom_conductors, f, indent=2, ensure_ascii=False)
+
+
+def initialize_session_state():
+    """Inicializar variables de estado de la sesión"""
+    if 'custom_conductors' not in st.session_state:
+        st.session_state.custom_conductors = load_custom_conductors()
+    if 'edit_mode' not in st.session_state:
+        st.session_state.edit_mode = False
+    if 'selected_custom_conductor' not in st.session_state:
+        st.session_state.selected_custom_conductor = None
+
+
+class CustomConductorDatabase(ConductorDatabase):
+    """Extensión de ConductorDatabase que incluye conductores personalizados"""
+    
+    def __init__(self, custom_conductors=None):
+        super().__init__()
+        if custom_conductors:
+            # Agregar conductores personalizados al diccionario base
+            for conductor_id, params in custom_conductors.items():
+                self.conductors[conductor_id] = params
+    
+    def get_conductors_by_type(self, conductor_type):
+        """Obtener conductores por tipo, incluyendo personalizados"""
+        if conductor_type == 'CUSTOM':
+            return {k: v for k, v in self.conductors.items() 
+                   if v.get('is_custom', False)}
+        return super().get_conductors_by_type(conductor_type)
+    
+    def add_custom_conductor(self, conductor_id, params):
+        """Agregar un conductor personalizado"""
+        params['is_custom'] = True
+        self.conductors[conductor_id] = params
+        return True
+    
+    def update_custom_conductor(self, conductor_id, params):
+        """Actualizar un conductor personalizado"""
+        if conductor_id in self.conductors and self.conductors[conductor_id].get('is_custom', False):
+            params['is_custom'] = True
+            self.conductors[conductor_id] = params
+            return True
+        return False
+    
+    def delete_custom_conductor(self, conductor_id):
+        """Eliminar un conductor personalizado"""
+        if conductor_id in self.conductors and self.conductors[conductor_id].get('is_custom', False):
+            del self.conductors[conductor_id]
+            return True
+        return False
 
 # Definiciones de tooltips para reutilización
 TOOLTIPS = {
@@ -21,10 +89,25 @@ TOOLTIPS = {
                      "**CU**: Cobre (mayor conductividad, más pesado y costoso)",
     
     'conductor_specific': "📏 **Conductor específico**\n\n"
-                         "Seleccione el tamaño del conductor según el código AWG o kcmil\n\n"
-                         "**AWG**: American Wire Gauge (calibre americano)\n"
-                         "**kcmil**: Miles de circular mils (área transversal)\n\n"
-                         "A mayor número kcmil → mayor área → mayor capacidad de corriente",
+                         "El código que identifica el tamaño exacto del conductor dentro de su tipo.\n\n"
+                         "**¿Qué es?**\n"
+                         "Es la designación estandarizada del tamaño del conductor según normas internacionales.\n\n"
+                         "**Códigos utilizados:**\n"
+                         "• **AWG** (American Wire Gauge): Calibre americano\n"
+                         "  - Usado en conductores más pequeños\n"
+                         "  - AWG 1/0 (más grande) → AWG 14 (más pequeño)\n"
+                         "• **kcmil** (kilo-circular mils): Miles de circular mils\n"
+                         "  - Usado en conductores grandes de transmisión\n"
+                         "  - Mayor número = mayor área transversal\n"
+                         "  - Ejemplo: 477 kcmil > 336 kcmil en capacidad\n\n"
+                         "**¿Dónde se ocupa?**\n"
+                         "• Catálogos de fabricantes de cables\n"
+                         "• Especificaciones técnicas de líneas de transmisión\n"
+                         "• Planillas de diseño eléctrico (single-line diagrams)\n"
+                         "• Normas IEEE y NEMA para conductores aéreos\n\n"
+                         "**Ejemplo práctico:**\n"
+                         "ACSR 477 kcmil = ACSR con 241.7 mm² de área\n"
+                         "Este es un conductor estándar en líneas de 69-138 kV",
     
     'diameter': "📐 **Diámetro del conductor**\n\n"
                "Diámetro externo del conductor en milímetros (mm)\n\n"
@@ -89,13 +172,31 @@ TOOLTIPS = {
                            "**Factor de seguridad**: Se recomienda usar 80-90% del límite térmico real",
     
     'altitude': "⛰️ **Altitud sobre el nivel del mar**\n\n"
-               "Elevación geográfica en metros\n\n"
-               "**Impacto físico**:\n"
+               "Elevación geográfica de la ubicación donde se instalará la línea de transmisión.\n\n"
+               "**¿Qué es?**\n"
+               "La altura vertical respecto al nivel medio del mar, medida en metros (m).\n"
+               "Afecta la densidad atmosférica y por tanto la capacidad de disipación térmica del conductor.\n\n"
+               "**¿Dónde se ocupa?**\n"
+               "• Diseño de líneas de transmisión en zonas montañosas o altiplanos\n"
+               "• Estudios de factibilidad para interconexiones eléctricas\n"
+               "• Cálculos de ampacidad en países con variación altitudinal\n"
+               "• Líneas en la cordillera de los Andes, Rocky Mountains, Himalaya\n"
+               "• Subestaciones ubicadas a gran altura (ej: La Paz, Bolivia ~3600 m)\n\n"
+               "**Impacto físico:**\n"
                "  • A mayor altitud → menor presión atmosférica\n"
-               "  • Menor presión → menor densidad del aire\n"
+               "  • Menor presión → menor densidad del aire (ρ ↓)\n"
                "  • Menor densidad → menos convección → más calentamiento\n\n"
-               "**Fórmula**: ρ = ρ₀ × exp(-h/8000) × (293.15/(T+273.15))\n\n"
-               "**Efecto**: Cada 1000m de altitud ≈ 3-5% menos capacidad",
+               "**Fórmula de densidad:**\n"
+               "  ρ = ρ₀ × exp(-h/8000) × (293.15/(T+273.15))\n\n"
+               "**Efecto en ampacidad:**\n"
+               "  • Cada 1000m de altitud ≈ -3% a -5% de capacidad\n"
+               "  • Ejemplo: 5000m tiene ~40-50% menos capacidad que nivel del mar\n\n"
+               "**Valores de referencia:**\n"
+               "  • Ciudad de México: ~2240 m\n"
+               "  • Quito, Ecuador: ~2850 m\n"
+               "  • La Paz, Bolivia: ~3640 m\n"
+               "  • Lhasa, Tibet: ~3650 m\n"
+               "  • El Alto, Bolivia: ~4150 m",
     
     'wind_speed': "🌪️ **Velocidad del viento perpendicular**\n\n"
                  "Velocidad del aire que fluye perpendicular al conductor en m/s\n\n"
@@ -253,22 +354,200 @@ def main():
         initial_sidebar_state="expanded"
     )
     
+    # Inicializar estado de sesión
+    initialize_session_state()
+    
     st.title("⚡ Calculadora de Ampacidad de Líneas de Transmisión")
     st.markdown("---")
     
-    # Inicializar calculadora y base de datos
+    # Inicializar calculadora y base de datos con conductores personalizados
     calculator = AmpacityCalculator()
-    conductor_db = ConductorDatabase()
+    conductor_db = CustomConductorDatabase(st.session_state.custom_conductors)
     
     # Sidebar para configuración
     with st.sidebar:
         st.header("🔧 Configuración")
         
+        # === GESTIÓN DE CONDUCTORES PERSONALIZADOS ===
+        with st.expander("⚡ Conductores Personalizados", expanded=False):
+            st.markdown("**📝 Agregar/Editar Conductor**")
+            
+            # Lista de conductores personalizados para editar
+            custom_list = {k: v for k, v in st.session_state.custom_conductors.items()}
+            
+            # Seleccionar modo: Agregar nuevo o Editar existente
+            mode = st.radio(
+                "Modo",
+                ["Nuevo conductor", "Editar existente"],
+                horizontal=True,
+                key="conductor_mode"
+            )
+            
+            if mode == "Editar existente" and custom_list:
+                selected_edit = st.selectbox(
+                    "Seleccionar conductor a editar",
+                    options=list(custom_list.keys()),
+                    format_func=lambda x: custom_list[x]['name'],
+                    key="edit_conductor_select"
+                )
+                edit_params = custom_list[selected_edit].copy() if selected_edit else {}
+            else:
+                selected_edit = None
+                edit_params = {}
+            
+            # Formulario para parámetros del conductor
+            st.markdown("---")
+            st.caption("**Parámetros del conductor**")
+            
+            new_id = st.text_input(
+                "ID único (sin espacios)",
+                value=selected_edit if selected_edit else "",
+                help="Ejemplo: ACSR_500_custom, MiConductor_001",
+                key="new_conductor_id"
+            )
+            
+            new_name = st.text_input(
+                "Nombre descriptivo",
+                value=edit_params.get('name', ''),
+                help="Ejemplo: ACSR 500 kcmil Personalizado",
+                key="new_conductor_name"
+            )
+            
+            new_type = st.selectbox(
+                "Tipo",
+                ['ACSR', 'AAC', 'AAAC', 'ACAR', 'CU', 'CUSTOM'],
+                index=['ACSR', 'AAC', 'AAAC', 'ACAR', 'CU', 'CUSTOM'].index(edit_params.get('type', 'ACSR')),
+                key="new_conductor_type"
+            )
+            
+            col1, col2 = st.columns(2)
+            with col1:
+                new_diameter = st.number_input(
+                    "Diámetro (mm)",
+                    value=edit_params.get('diameter', 20.0),
+                    min_value=1.0,
+                    max_value=50.0,
+                    step=0.1,
+                    key="new_diameter"
+                )
+                new_rdc = st.number_input(
+                    "R DC 20°C (Ω/km)",
+                    value=edit_params.get('rdc_20', 0.1),
+                    min_value=0.001,
+                    max_value=2.0,
+                    step=0.001,
+                    format="%.4f",
+                    key="new_rdc"
+                )
+                new_alpha = st.number_input(
+                    "Alpha (1/°C)",
+                    value=edit_params.get('alpha', 0.00403),
+                    min_value=0.001,
+                    max_value=0.01,
+                    step=0.0001,
+                    format="%.5f",
+                    key="new_alpha"
+                )
+                new_max_temp = st.number_input(
+                    "Temp. máx (°C)",
+                    value=edit_params.get('max_temp', 75.0),
+                    min_value=50.0,
+                    max_value=150.0,
+                    step=1.0,
+                    key="new_max_temp"
+                )
+            
+            with col2:
+                new_area = st.number_input(
+                    "Área (mm²)",
+                    value=edit_params.get('area', 250.0),
+                    min_value=10.0,
+                    max_value=1000.0,
+                    step=1.0,
+                    key="new_area"
+                )
+                new_beta = st.number_input(
+                    "Beta",
+                    value=edit_params.get('beta', 0.035),
+                    min_value=0.001,
+                    max_value=0.1,
+                    step=0.001,
+                    format="%.3f",
+                    key="new_beta"
+                )
+                new_weight = st.number_input(
+                    "Peso (kg/m)",
+                    value=edit_params.get('weight', 1.0),
+                    min_value=0.1,
+                    max_value=5.0,
+                    step=0.01,
+                    key="new_weight"
+                )
+            
+            # Botones de acción
+            col_save, col_delete = st.columns(2)
+            
+            with col_save:
+                if st.button("💾 Guardar", use_container_width=True, key="save_conductor"):
+                    if new_id and new_name:
+                        # Crear diccionario del conductor
+                        conductor_data = {
+                            'name': new_name,
+                            'type': new_type,
+                            'diameter': new_diameter,
+                            'area': new_area,
+                            'rdc_20': new_rdc,
+                            'alpha': new_alpha,
+                            'beta': new_beta,
+                            'weight': new_weight,
+                            'max_temp': new_max_temp,
+                            'is_custom': True
+                        }
+                        
+                        # Guardar en session state
+                        st.session_state.custom_conductors[new_id] = conductor_data
+                        save_custom_conductors(st.session_state.custom_conductors)
+                        
+                        # Actualizar base de datos
+                        conductor_db.add_custom_conductor(new_id, conductor_data)
+                        
+                        st.success(f"✅ Conductor '{new_name}' guardado!")
+                        st.rerun()
+                    else:
+                        st.error("⚠️ ID y nombre son obligatorios")
+            
+            with col_delete:
+                if mode == "Editar existente" and selected_edit:
+                    if st.button("🗑️ Eliminar", use_container_width=True, key="delete_conductor"):
+                        if selected_edit in st.session_state.custom_conductors:
+                            del st.session_state.custom_conductors[selected_edit]
+                            save_custom_conductors(st.session_state.custom_conductors)
+                            conductor_db.delete_custom_conductor(selected_edit)
+                            st.success(f"✅ Conductor eliminado!")
+                            st.rerun()
+            
+            # Mostrar lista de conductores personalizados
+            if st.session_state.custom_conductors:
+                st.markdown("---")
+                st.caption(f"**📋 Conductores personalizados guardados: {len(st.session_state.custom_conductors)}**")
+                for cid, cdata in st.session_state.custom_conductors.items():
+                    st.markdown(f"• **{cdata['name']}** ({cid})")
+            else:
+                st.info("💡 No hay conductores personalizados. Agrega uno usando el formulario.")
+        
+        st.markdown("---")
+        
         # Selección de conductor
         st.subheader("Conductor")
+        
+        # Agregar tipo CUSTOM a las opciones si hay conductores personalizados
+        available_types = list(CONDUCTOR_TYPES.keys())
+        if st.session_state.custom_conductors:
+            available_types.append('CUSTOM')
+        
         conductor_type = st.selectbox(
             "Tipo de conductor",
-            list(CONDUCTOR_TYPES.keys()),
+            available_types,
             help=TOOLTIPS['conductor_type']
         )
         
